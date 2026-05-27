@@ -51,8 +51,6 @@ class SessionTracker:
         distraction = np.mean([s.get("distraction", 0.0) for s in self._scores])
         focus_global = np.mean([s.get("focus_global", 0.0) for s in self._scores])
 
-        # Extra safety check to respect the rules
-        focus_global = min(focus_global, concentration)
         if fatigue >= 99.0:
             focus_global = min(focus_global, 50.0)
         if distraction >= 99.0:

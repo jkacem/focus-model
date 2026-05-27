@@ -19,12 +19,15 @@ class ConcentrationScorer:
         pitch_corr = pitch - calibrator.pitch_baseline
         ear_norm = ear / max(calibrator.ear_baseline, 0.20)
         
-        gaze = max(0.0, 1.0 - abs(yaw_corr) / 35.0) * max(0.0, 1.0 - abs(pitch_corr) / 25.0)
-        eye_open = max(0.0, min(1.0, (ear_norm - 0.65) / (1.0 - 0.65)))
-        
+        # pitch tolerance raised to 35° — screen sits below camera, natural downward gaze ~10-20°
+        gaze = max(0.0, 1.0 - abs(yaw_corr) / 35.0) * max(0.0, 1.0 - abs(pitch_corr) / 35.0)
+        # Threshold at 35% of baseline: screen work keeps eyes noticeably less open than camera-gazing calibration
+        eye_open = max(0.0, min(1.0, (ear_norm - 0.35) / 0.65))
+
         if len(self.yaw_history) > 1:
             variance = np.var(self.yaw_history)
-            stability = max(0.0, 1.0 - variance / 10.0)
+            # Divide by 40 instead of 10: natural ±5° reading movement (variance≈8) now gives stability≈0.80
+            stability = max(0.0, 1.0 - variance / 40.0)
         else:
             stability = 1.0
             
@@ -164,9 +167,8 @@ class ScoreEngine:
         self.posture       = posture_scorer
         self.fatigue       = fatigue_modulator
         
-        self.total_frames = 0
-        self.distracted_frames = 0
         self._vigilance_ema = 100.0
+        self._d_ema = 0.0  # EMA distraction: rises fast, falls slowly when focused
         
         self.calibrator = PostureCalibrator(fps=15)
 
@@ -190,8 +192,6 @@ class ScoreEngine:
                 "posture_available": pose_available
             }
 
-        self.total_frames += 1
-        
         c, c_lente, gaze = self.concentration.compute(yaw, pitch, ear, self.calibrator)
         
         if pose_available:
@@ -211,20 +211,22 @@ class ScoreEngine:
         vigilance_raw = max(0.0, min(1.0, 1.0 - perclos / 0.40)) * 100.0
         self._vigilance_ema = 0.08 * vigilance_raw + 0.92 * self._vigilance_ema
         
-        # Distraction logic (slow EMA and relative thresholds)
+        # Distraction: EMA bidirectionnel — monte vite, descend lentement quand concentré
         is_distracted = False
         if phone_detected and phone_confidence > 0.60:
             is_distracted = True
         elif gaze < 0.10:
+            # Only trigger on extreme head turn (>~31° combined), not normal screen gaze
             is_distracted = True
-        elif c_lente < 35.0:
-            is_distracted = True
-            
+
         if is_distracted:
-            self.distracted_frames += 1
-            
-        d_ratio = self.distracted_frames / self.total_frames if self.total_frames > 0 else 0.0
-        d_ratio = max(0.0, min(0.95, d_ratio))
+            # Rises fast (alpha=0.10)
+            self._d_ema = 0.10 * 1.0 + 0.90 * self._d_ema
+        else:
+            # Falls at alpha=0.05: returns to ~0 in ~60 focused frames instead of 150
+            self._d_ema = 0.05 * 0.0 + 0.95 * self._d_ema
+
+        d_ratio = max(0.0, min(0.95, self._d_ema))
         distraction_out = d_ratio * 100.0
 
         if p is not None:
@@ -236,7 +238,6 @@ class ScoreEngine:
 
         focus_global = raw_score * (1.0 - d_ratio)
         focus_global = max(0.0, min(100.0, focus_global))
-        focus_global = min(focus_global, c)
 
         return {
             "concentration": round(c, 1),
