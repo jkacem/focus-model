@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartFocus Voice Assistant — Python Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Install:
+#   Linux/Pi  → bash install_voice.sh
+#   Windows   → install_voice_windows.bat
+#
+# Or manually:
+#   pip install -r requirements_voice.txt
+#
+# NOTE: pyaudio installation differs by platform (see install scripts).
+#       sounddevice is used as the primary audio I/O library.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Speech-to-Text (Whisper — local, offline) ─────────────────────────────────
+openai-whisper>=20231117
+
+# ── Text-to-Speech (Piper — binary called via subprocess) ─────────────────────
+# piper-tts is kept as a fallback Python library if the binary is unavailable.
+# The binary is auto-downloaded by tts_engine.py on first run.
+piper-tts>=1.2.0
+
+# ── Wake Word Detection (OpenWakeWord — local, offline) ───────────────────────
+openwakeword>=0.6.0
+
+# ── Audio I/O (cross-platform, no shell commands) ─────────────────────────────
+sounddevice>=0.4.6
+soundfile>=0.12.1
+
+# ── Numeric / ML utilities ────────────────────────────────────────────────────
+numpy>=1.24.0
+
+# ── HTTP client (backend calls) ───────────────────────────────────────────────
+requests>=2.31.0
+httpx>=0.25.0          # async-friendly alternative (used by future Gemini provider)
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0   # Loads .env for PI_API_KEY / GOOGLE_API_KEY
+
+# ── Future: Gemini Live provider ─────────────────────────────────────────────
+# Uncomment when implementing providers/gemini_live/session.py:
+# google-genai>=1.0.0
+
+# ── Platform note: pyaudio ───────────────────────────────────────────────────
+# Linux/Pi:  pip install pyaudio   (after: sudo apt install portaudio19-dev)
+# Windows:   pip install pipwin && pipwin install pyaudio
+# (sounddevice is used instead of pyaudio in all voice_assistant code,
+#  but some openwakeword internals may need pyaudio on certain platforms.)
