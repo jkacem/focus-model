@@ -83,7 +83,7 @@ class CVMonitor:
                 self._tick()
                 self._retry_delay = self._INITIAL_RETRY_DELAY  # reset on success
             except _PollError as exc:
-                logger.warning("[CVMonitor] Poll failed: %s. Retry in %.0fs.", exc, self._retry_delay)
+                logger.debug("[CVMonitor] Poll failed: %s. Retry in %.0fs.", exc, self._retry_delay)
                 self._retry_delay = min(self._retry_delay * 2, self._MAX_RETRY_DELAY)
             except Exception as exc:
                 logger.error("[CVMonitor] Unexpected error: %s", exc, exc_info=True)
@@ -103,36 +103,29 @@ class CVMonitor:
         self._poll_critical_events()
 
     def _poll_snapshot(self) -> None:
-        """GET /api/v1/sessions/{id}/latest → push snapshot to queue.
-        Falls back to local .jsonl file when backend is unreachable.
-        """
-        url = f"{self.backend_url}/api/v1/sessions/{self.session_id}/latest"
-        data = None
-
-        try:
-            data = self._get(url)
-        except _PollError:
-            data = self._read_local_snapshot()
-            if data is None:
-                raise  # both failed — trigger backoff warning
-
+        """Read latest snapshot from local .jsonl file (100% local mode)."""
+        data = self._read_local_snapshot()
         if data is None:
+            # No active session yet — skip silently, no backoff
             return
-
         self._put({"type": "snapshot", "data": data})
-        logger.debug(
-            "[CVMonitor] Snapshot → focus=%.0f posture=%.0f vigilance=%.0f",
+        logger.info(
+            "[CVMonitor] Snapshot → focus=%.1f posture=%.1f vigilance=%.1f",
             data.get("global_focus_score", -1),
             data.get("posture_score", -1),
             data.get("vigilance_score", -1),
         )
 
-    def _read_local_snapshot(self) -> Optional[dict]:
-        """Read the latest snapshot from the most recently active session file.
+    # Number of recent frames to average for alert snapshots (~15s at 2fps)
+    _ALERT_WINDOW_FRAMES: int = 30
 
-        Sorts by the timestamp embedded in the last JSON line of each file,
-        so the file with the freshest data is always used regardless of mtime.
+    def _read_local_snapshot(self) -> Optional[dict]:
+        """Return a sliding-window average of the last N frames from the active
+        session JSONL. More stable than a single frame, more reactive than the
+        full-session average.
         """
+        from datetime import datetime, timezone
+
         if not config.SESSIONS_DIR.exists():
             return None
 
@@ -143,7 +136,9 @@ class CVMonitor:
         if not all_files:
             return None
 
-        scored = []
+        # Pick the file with the most recent last-frame timestamp
+        best_file = None
+        best_ts = ""
         for f in all_files:
             try:
                 with open(f, "r", encoding="utf-8") as fh:
@@ -155,83 +150,56 @@ class CVMonitor:
                 if not last:
                     continue
                 entry = json.loads(last)
-                if not entry.get("scores"):
-                    continue
-                scored.append((entry.get("timestamp", ""), f, entry))
+                ts = entry.get("timestamp", "")
+                if ts > best_ts and entry.get("scores"):
+                    best_ts = ts
+                    best_file = f
             except (OSError, json.JSONDecodeError):
                 continue
 
-        if not scored:
+        if best_file is None:
             return None
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        _, _, raw = scored[0]
+        # Reject stale data — session has ended
+        try:
+            frame_ts = datetime.strptime(best_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - frame_ts).total_seconds() > 30:
+                return None
+        except Exception:
+            pass
 
-        scores = raw["scores"]
-        fatigue_ratio = float(scores.get("fatigue", 0.0))
-        vigilance = max(0.0, (1.0 - min(fatigue_ratio, 1.0)) * 100.0)
-        return {
-            "attention_score": scores.get("concentration"),
-            "posture_score": scores.get("posture"),
-            "vigilance_score": vigilance,
-            "global_focus_score": scores.get("focus_global"),
-            "state": raw.get("state"),
-        }
+        # Read last N frames and average their scores
+        try:
+            lines = []
+            with open(best_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s:
+                        lines.append(s)
+            window = lines[-self._ALERT_WINDOW_FRAMES:]
+            entries = [json.loads(l) for l in window]
+            scores_list = [e["scores"] for e in entries if e.get("scores")]
+            if not scores_list:
+                return None
+
+            def avg(key):
+                vals = [s.get(key) for s in scores_list if s.get(key) is not None]
+                return round(sum(vals) / len(vals), 1) if vals else None
+
+            fatigue_pct = float(avg("fatigue") or 0.0)
+            return {
+                "attention_score":    avg("concentration"),
+                "posture_score":      avg("posture"),
+                "fatigue_score":      round(fatigue_pct, 1),
+                "vigilance_score":    max(0.0, 100.0 - fatigue_pct),
+                "global_focus_score": avg("focus_global"),
+            }
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def _poll_critical_events(self) -> None:
-        """GET /api/v1/vision/events?... → push critical events to queue.
-
-        This endpoint is best-effort: if it returns 404 or is not implemented
-        by the backend, we silently skip it. The snapshot scores cover the
-        majority of alert cases; this is only for explicit "critical" events.
-        """
-        url = (
-            f"{self.backend_url}/api/v1/vision/events"
-            f"?session_id={self.session_id}&level=critical&limit=5"
-        )
-        try:
-            resp = requests.get(url, headers=self._headers, timeout=4.0)
-        except requests.exceptions.RequestException:
-            return  # Silently skip — events endpoint is optional
-
-        if resp.status_code in (404, 405, 501):
-            return  # Endpoint not implemented — skip
-
-        if resp.status_code != 200:
-            return
-
-        try:
-            events: Any = resp.json()
-        except ValueError:
-            return
-
-        if not isinstance(events, list):
-            events = events.get("events") or events.get("items") or []
-
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            if event.get("level") != "critical":
-                continue
-
-            event_id = str(event.get("id") or event.get("timestamp") or id(event))
-            if event_id in self._seen_event_ids:
-                continue
-
-            self._seen_event_ids.add(event_id)
-            # Prune seen-set to avoid unbounded growth
-            if len(self._seen_event_ids) > 200:
-                self._seen_event_ids = set(list(self._seen_event_ids)[-100:])
-
-            self._put({
-                "type": "critical_event",
-                "data": {
-                    "description": event.get("description", "Alerte critique"),
-                    "event_type": event.get("event_type", "unknown"),
-                    "level": "critical",
-                },
-            })
-            logger.info("[CVMonitor] Critical event: %s", event.get("description", ""))
+        """No-op in local mode — critical events come from JSONL alerts field."""
+        pass
 
     def _get(self, url: str) -> Optional[dict]:
         """GET with error handling. Returns None for 404, raises _PollError otherwise."""

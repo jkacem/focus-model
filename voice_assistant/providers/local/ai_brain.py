@@ -86,120 +86,93 @@ class LocalAIBrain(BaseAIBrain):
         return self._format_planning(data)
 
     def get_latest_stats(self, session_id: str) -> str:
-        """Return current focus/posture/fatigue scores. Reads local file first."""
+        """Return current focus/posture/fatigue scores from local session files."""
         local_data = self._read_local_stats(session_id)
         if local_data:
             return self._format_stats(local_data)
-
-        url = f"{self.backend_url}/api/v1/sessions/{session_id}/latest"
-        try:
-            data = self._get(url)
-        except _BackendError as exc:
-            logger.warning("[Brain] sessions/latest failed: %s", exc)
-            return "Impossible de récupérer tes statistiques pour le moment."
-
-        return self._format_stats(data)
+        return "Pas encore de données de session disponibles."
 
     def _read_local_stats(self, session_id: str) -> Optional[dict]:
-        """Read stats from session_summary.json (exact averaged values from main_cv.py).
+        """Return session-wide averaged scores.
 
-        Falls back to the most recent per-frame .jsonl entry if no summary exists.
+        For each JSONL (newest first):
+        - If {stem}_summary.json exists → session is complete, read the summary
+        - Otherwise → session is active, average all frames from the JSONL
         """
-        # Primary: active session — a .jsonl file with NO matching _summary.json yet,
-        # AND modified within the last 2 hours (excludes old orphaned files).
-        import time as _time
-        _TWO_HOURS = 2 * 3600
-        if config.SESSIONS_DIR.exists():
-            now = _time.time()
-            jsonl_files = list(config.SESSIONS_DIR.glob("*.jsonl"))
-            active = [
-                f for f in jsonl_files
-                if not (config.SESSIONS_DIR / f"{f.stem}_summary.json").exists()
-                and (now - f.stat().st_mtime) < _TWO_HOURS
-            ]
-            # Pick the most recently modified active session file
-            active.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-            for f in active:
-                try:
-                    # Read last 60 frames and average them for a stable score
-                    lines = []
-                    with open(f, "r", encoding="utf-8") as fh:
-                        for line in fh:
-                            s = line.strip()
-                            if s:
-                                lines.append(s)
-                    recent = lines[-60:] if len(lines) >= 60 else lines
-                    if not recent:
-                        continue
-                    entries = [json.loads(l) for l in recent]
-                    scores_list = [e.get("scores", {}) for e in entries if e.get("scores")]
-                    if not scores_list:
-                        continue
-                    def avg(key):
-                        vals = [s.get(key) for s in scores_list if s.get(key) is not None]
-                        return round(sum(vals) / len(vals), 1) if vals else None
-                    return {
-                        "attention_score": avg("concentration"),
-                        "posture_score": avg("posture"),
-                        "fatigue_score": avg("fatigue"),
-                        "distraction_score": avg("distraction"),
-                        "global_focus_score": avg("focus_global"),
-                    }
-                except (OSError, json.JSONDecodeError):
-                    continue
-
-        # Fallback: session_summary.json — last completed session's averaged data.
-        summary_path = config.SESSION_SUMMARY_PATH
-        if summary_path.exists():
-            try:
-                with open(summary_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if data.get("focus_global") is not None:
-                    return {
-                        "attention_score": data.get("concentration"),
-                        "posture_score": data.get("posture"),
-                        "fatigue_score": data.get("fatigue"),
-                        "distraction_score": data.get("distraction"),
-                        "global_focus_score": data.get("focus_global"),
-                    }
-            except (OSError, json.JSONDecodeError):
-                pass
-
-        # Fallback: last frame from the most recent .jsonl file
         if not config.SESSIONS_DIR.exists():
             return None
-        all_files = [
-            f for f in config.SESSIONS_DIR.glob("*.jsonl")
-            if not f.stem.endswith("_summary")
-        ]
-        scored = []
-        for f in all_files:
+
+        def _read_summary_json(path) -> Optional[dict]:
             try:
-                with open(f, "r", encoding="utf-8") as fh:
-                    last = None
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("focus_global") is None:
+                    return None
+                return {
+                    "attention_score": data.get("concentration"),
+                    "posture_score": data.get("posture"),
+                    "fatigue_score": data.get("fatigue"),
+                    "distraction_score": data.get("distraction"),
+                    "global_focus_score": data.get("focus_global"),
+                }
+            except (OSError, json.JSONDecodeError):
+                return None
+
+        def _avg_from_jsonl(path) -> Optional[dict]:
+            try:
+                lines = []
+                with open(path, "r", encoding="utf-8") as fh:
                     for line in fh:
                         s = line.strip()
                         if s:
-                            last = s
-                if not last:
-                    continue
-                entry = json.loads(last)
-                if not entry.get("scores"):
-                    continue
-                scored.append((entry.get("timestamp", ""), entry))
+                            lines.append(s)
+                if not lines:
+                    return None
+                entries = [json.loads(l) for l in lines]
+                scores_list = [e.get("scores", {}) for e in entries if e.get("scores")]
+                if not scores_list:
+                    return None
+                def avg(key):
+                    vals = [s.get(key) for s in scores_list if s.get(key) is not None]
+                    return round(sum(vals) / len(vals), 1) if vals else None
+                return {
+                    "attention_score": avg("concentration"),
+                    "posture_score": avg("posture"),
+                    "fatigue_score": avg("fatigue"),
+                    "distraction_score": avg("distraction"),
+                    "global_focus_score": avg("focus_global"),
+                }
             except (OSError, json.JSONDecodeError):
-                continue
-        if not scored:
+                return None
+
+        def _load_session(stem: str) -> Optional[dict]:
+            """Active session → average JSONL. Completed session → read summary."""
+            summary_file = config.SESSIONS_DIR / f"{stem}_summary.json"
+            if summary_file.exists():
+                return _read_summary_json(summary_file)
+            jsonl_file = config.SESSIONS_DIR / f"{stem}.jsonl"
+            if jsonl_file.exists():
+                return _avg_from_jsonl(jsonl_file)
             return None
-        scored.sort(key=lambda x: x[0], reverse=True)
-        raw = scored[0][1]["scores"]
-        return {
-            "attention_score": raw.get("concentration"),
-            "posture_score": raw.get("posture"),
-            "fatigue_score": None,
-            "distraction_score": raw.get("distraction"),
-            "global_focus_score": raw.get("focus_global"),
-        }
+
+        # Always read the most recently modified session (active or completed).
+        # Ignores the startup session_id so real-time parallel use works:
+        # main_cv.py can start a new session after Jarvis launched and stats
+        # will reflect the current session automatically.
+        jsonl_files = [
+            f for f in config.SESSIONS_DIR.glob("*.jsonl")
+            if not f.stem.endswith("_summary")
+        ]
+        if not jsonl_files:
+            return None
+
+        jsonl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        for jsonl_f in jsonl_files:
+            result = _load_session(jsonl_f.stem)
+            if result:
+                return result
+
+        return None
 
     def _call_gemini(self, question: str) -> str:
         """Call Gemini API directly for free-form questions."""
@@ -297,7 +270,7 @@ class LocalAIBrain(BaseAIBrain):
             parts.append(f"Ta posture est {posture_comment} avec un score de {int(posture)} pour cent.")
 
         if fatigue is not None:
-            fatigue_comment = "très fatigué" if fatigue >= 2.0 else ("un peu fatigué" if fatigue >= 0.8 else "en forme")
+            fatigue_comment = "très fatigué" if fatigue >= 20.0 else ("un peu fatigué" if fatigue >= 5.0 else "en forme")
             parts.append(f"Pour la fatigue, tu sembles {fatigue_comment}.")
 
         if distraction is not None:

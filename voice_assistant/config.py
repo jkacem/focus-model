@@ -32,7 +32,7 @@ LANGUAGE: str = "fr"  # ISO 639-1: all speech input/output is French
 # ── STT — OpenAI Whisper (local, offline) ─────────────────────────────────────
 # "small" gives the best accuracy/speed trade-off for Pi 5 + Windows dev.
 # Other options: "tiny" (fastest), "base", "medium" (most accurate, slower).
-WHISPER_MODEL: str = "small"
+WHISPER_MODEL: str = "tiny"    # "small" too slow on Pi CPU — use "small" on PC
 
 # ── TTS — Piper (local, offline) ──────────────────────────────────────────────
 PIPER_VOICE_MODEL: str = "fr_FR-upmc-medium"
@@ -94,11 +94,12 @@ WAKE_WORD_SENSITIVITY: float = 0.5
 
 # ── CV alert thresholds ───────────────────────────────────────────────────────
 FOCUS_ALERT_THRESHOLD: int = 40       # % — alert when global_focus_score < this
+CRITICAL_FOCUS_THRESHOLD: int = 20   # % — critical alert when focus is extremely low
 POSTURE_ALERT_THRESHOLD: int = 35     # % — alert when posture_score < this
-FATIGUE_THRESHOLD: int = 30           # % — alert when vigilance_score < this
+FATIGUE_THRESHOLD: int = 30           # % — alert when fatigue_score > this (0-100)
 GOOD_FOCUS_THRESHOLD: int = 80        # % — positive reinforcement above this
-GOOD_FOCUS_DURATION: int = 1200       # seconds (20 min) sustained good focus
-POSTURE_SUSTAINED_SECONDS: float = 120.0  # 2 min bad posture before alerting
+GOOD_FOCUS_DURATION: int = 1200       # seconds (20 min) sustained good focus — set to 30 for testing
+POSTURE_SUSTAINED_SECONDS: float = 120.0  # 2 min bad posture before alerting — set to 10.0 for testing
 
 # ── Polling ───────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SECONDS: float = 5.0   # CV snapshot poll interval
@@ -118,6 +119,7 @@ BREAK_DURATION_SECONDS: int = 300     # 5 minutes
 
 # ── Per-alert-type cooldowns (seconds) ───────────────────────────────────────
 COOLDOWN_FOCUS_ALERT: int = 180       # 3 min
+COOLDOWN_CRITICAL_FOCUS: int = 120    # 2 min — fires more often than regular focus
 COOLDOWN_POSTURE_ALERT: int = 240     # 4 min
 COOLDOWN_FATIGUE_ALERT: int = 300     # 5 min
 COOLDOWN_GOOD_FOCUS: int = 1500       # 25 min

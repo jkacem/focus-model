@@ -48,6 +48,11 @@ _MSG_FATIGUE = (
     "plus efficace après."
 )
 
+_MSG_CRITICAL_FOCUS = (
+    "Alerte critique : ton score de focus est extrêmement bas. "
+    "Tu es très distrait, arrête-toi et recentre-toi immédiatement."
+)
+
 _MSG_GOOD_FOCUS = (
     "Excellent travail ! Tu es concentré depuis 20 minutes. "
     "Pense à faire une courte pause bientôt."
@@ -189,15 +194,31 @@ class AlertManager:
 
         focus = float(state.get("global_focus_score", 100.0))
         posture = float(state.get("posture_score", 100.0))
-        vigilance = float(state.get("vigilance_score", 100.0))
+        fatigue = float(state.get("fatigue_score", 0.0))
+
+        logger.info(
+            "[Alerts] Eval → focus=%.1f(seuil<%d) posture=%.1f(seuil<%d) fatigue=%.1f(seuil>%d)",
+            focus, config.FOCUS_ALERT_THRESHOLD,
+            posture, config.POSTURE_ALERT_THRESHOLD,
+            fatigue, config.FATIGUE_THRESHOLD,
+        )
+
+        # ── Critical focus alert (priority — fires before regular focus) ──
+        if focus < config.CRITICAL_FOCUS_THRESHOLD:
+            logger.info("[Alerts] Focus CRITIQUE (%.1f < %d)", focus, config.CRITICAL_FOCUS_THRESHOLD)
+            if self._can_fire("critical_focus", config.COOLDOWN_CRITICAL_FOCUS):
+                self._speak_alert(_MSG_CRITICAL_FOCUS)
+                self._mark_fired("critical_focus")
+                self._mark_fired("focus")
 
         # ── Low focus alert ───────────────────────────────────────────────
-        if focus < config.FOCUS_ALERT_THRESHOLD:
+        elif focus < config.FOCUS_ALERT_THRESHOLD:
+            logger.info("[Alerts] Focus BAS (%.1f < %d)", focus, config.FOCUS_ALERT_THRESHOLD)
             if self._can_fire("focus", config.COOLDOWN_FOCUS_ALERT):
                 self._speak_alert(_MSG_FOCUS_LOW)
                 self._mark_fired("focus")
 
-        # ── Bad posture alert (sustained > 2 min) ─────────────────────────
+        # ── Bad posture alert (sustained) ─────────────────────────────────
         if posture < config.POSTURE_ALERT_THRESHOLD:
             if self._posture_bad_since is None:
                 self._posture_bad_since = now
@@ -206,15 +227,14 @@ class AlertManager:
                 if self._can_fire("posture", config.COOLDOWN_POSTURE_ALERT):
                     self._speak_alert(_MSG_POSTURE_BAD)
                     self._mark_fired("posture")
-                    # Reset sustain timer after firing so we track the *next* episode
                     self._posture_bad_since = now
         else:
             if self._posture_bad_since is not None:
                 logger.debug("[Alerts] Posture recovered — resetting timer.")
             self._posture_bad_since = None
 
-        # ── Fatigue / vigilance alert ─────────────────────────────────────
-        if vigilance < config.FATIGUE_THRESHOLD:
+        # ── Fatigue alert (score direct, pas vigilance) ───────────────────
+        if fatigue > config.FATIGUE_THRESHOLD:
             if self._can_fire("fatigue", config.COOLDOWN_FATIGUE_ALERT):
                 self._speak_alert(_MSG_FATIGUE)
                 self._mark_fired("fatigue")

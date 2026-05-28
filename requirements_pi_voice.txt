@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartFocus Voice Assistant — Raspberry Pi 5 (ARM64)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# BEFORE pip install, run:
+#   sudo apt update
+#   sudo apt install -y ffmpeg portaudio19-dev libsndfile1 python3-dev
+#
+# Install:
+#   pip install -r requirements_pi_voice.txt
+#
+# IMPORTANT: change Whisper model in voice_assistant/config.py:
+#   WHISPER_MODEL: str = "tiny"   # "small" is too slow on Pi CPU
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Speech-to-Text (Whisper — local, offline) ─────────────────────────────────
+openai-whisper>=20231117         # use model "tiny" in config.py for Pi performance
+
+# ── Wake Word Detection ───────────────────────────────────────────────────────
+openwakeword>=0.6.0
+
+# ── Audio I/O ─────────────────────────────────────────────────────────────────
+sounddevice>=0.4.6               # requires: sudo apt install portaudio19-dev
+soundfile>=0.12.1                # requires: sudo apt install libsndfile1
+
+# ── Core ──────────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# ── NOT included (Pi-specific reasons) ───────────────────────────────────────
+# piper-tts   → binary auto-downloaded (ARM64 aarch64 configured in config.py)
+# httpx       → removed (100% local mode, no backend calls)
+# torch       → installed separately via PyTorch CPU wheel

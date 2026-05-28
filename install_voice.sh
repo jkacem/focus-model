@@ -56,6 +56,8 @@ sudo apt-get install -y \
     libsndfile1 \
     libsndfile1-dev \
     libasound2-dev \
+    python3-dev \
+    libatlas-base-dev \
     curl \
     wget \
     unzip \
@@ -67,8 +69,19 @@ ok "System packages installed."
 # ── Step 2: Python dependencies ───────────────────────────────────────────────
 echo -e "\n${BOLD}[2/7] Installing Python packages…${NC}"
 pip install --upgrade pip
+
+# PyTorch CPU (ARM64) — must be installed before openai-whisper
+info "Installing PyTorch CPU wheel for ARM64…"
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 pip install pyaudio
-pip install -r "$SCRIPT_DIR/requirements_voice.txt"
+
+# Use Pi-specific requirements (no piper-tts package, no httpx)
+if [[ -f "$SCRIPT_DIR/requirements_pi_voice.txt" ]]; then
+    pip install -r "$SCRIPT_DIR/requirements_pi_voice.txt"
+else
+    pip install -r "$SCRIPT_DIR/requirements_voice.txt"
+fi
 ok "Python packages installed."
 
 # ── Step 3: Piper TTS binary ──────────────────────────────────────────────────
@@ -143,8 +156,8 @@ print('  Model ready.')
 echo -e "\n${BOLD}[6/7] Verifying Whisper…${NC}"
 python3 -c "
 import whisper
-print('  Loading Whisper small model (first load may take a moment)…')
-m = whisper.load_model('small')
+print('  Loading Whisper tiny model (optimised for Pi CPU)…')
+m = whisper.load_model('tiny')
 print('  Whisper ready.')
 " && ok "Whisper model verified." || warn "Whisper verification failed — will retry on first run."
 
@@ -178,13 +191,10 @@ else
 fi
 echo -e "${BOLD}══════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Quick start:"
-echo "    cd $(dirname "$SCRIPT_DIR")/pi_client"
-echo "    python run_voice_assistant.py --session-id <YOUR_SESSION_UUID>"
+echo "  Quick start (run both in parallel):"
+echo "    Terminal 1:  python main_cv.py"
+echo "    Terminal 2:  python run_voice_assistant.py"
 echo ""
 echo "  With debug logging:"
-echo "    python run_voice_assistant.py --session-id <UUID> --debug"
-echo ""
-echo "  To find your session UUID, check the output of main_cv.py:"
-echo "    grep 'Session' session_log.txt | head -1"
+echo "    python run_voice_assistant.py --debug"
 echo ""

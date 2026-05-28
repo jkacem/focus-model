@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartFocus — Raspberry Pi 5 (ARM64) — CV dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# BEFORE pip install, run:
+#   sudo apt update
+#   sudo apt install -y python3-dev cmake ffmpeg libatlas-base-dev
+#
+# PyTorch MUST be installed separately (NOT via this file):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# Then install this file:
+#   pip install -r requirements_pi.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Computer Vision ───────────────────────────────────────────────────────────
+mediapipe>=0.10.14
+opencv-python-headless>=4.8.0   # headless = no Qt/GUI, lighter on Pi
+
+# ── YOLO phone detection ──────────────────────────────────────────────────────
+ultralytics>=8.0.0               # requires torch (install separately, see above)
+
+# ── Core ──────────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+requests>=2.31.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
